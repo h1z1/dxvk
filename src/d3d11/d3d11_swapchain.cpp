@@ -215,9 +215,6 @@ namespace dxvk {
       m_dirty = false;
     }
 
-    if (!m_presenter->hasSwapChain())
-      hr = DXGI_STATUS_OCCLUDED;
-
     if (m_device->getDeviceStatus() != VK_SUCCESS)
       hr = DXGI_ERROR_DEVICE_RESET;
 
@@ -254,7 +251,7 @@ namespace dxvk {
       SynchronizePresent();
 
       if (!m_presenter->hasSwapChain())
-        return DXGI_STATUS_OCCLUDED;
+        return S_OK;
 
       // Presentation semaphores and WSI swap chain image
       vk::PresenterInfo info = m_presenter->info();
@@ -269,7 +266,7 @@ namespace dxvk {
         RecreateSwapChain(m_vsync);
 
         if (!m_presenter->hasSwapChain())
-          return DXGI_STATUS_OCCLUDED;
+          return S_OK;
         
         info = m_presenter->info();
         sync = m_presenter->getSyncSemaphores();
