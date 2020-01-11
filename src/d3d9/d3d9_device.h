@@ -733,11 +733,17 @@ namespace dxvk {
 
     void UpdateActiveRTs(uint32_t index);
 
-    void UpdateActiveRTTextures(uint32_t index);
+    void UpdateManagedTextureUploadIndex(uint32_t index);
+
+    void UpdateManagedTextureUploadsAll();
+
+    void UpdateActiveTextures(uint32_t index);
 
     void UpdateActiveHazards();
 
     void MarkRenderHazards();
+
+    void UploadManagedTextures();
 
     template <bool Points>
     void UpdatePointMode();
@@ -1015,6 +1021,8 @@ namespace dxvk {
     uint32_t                        m_activeRTTextures = 0;
     uint32_t                        m_activeHazards    = 0;
     uint32_t                        m_alphaSwizzleRTs  = 0;
+    uint32_t                        m_activeTexturesToUpload = 0;
+    uint32_t                        m_activeTexturesToUploadFinal = 0;
 
     D3D9ViewportInfo                m_viewportInfo;
 

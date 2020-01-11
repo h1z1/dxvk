@@ -3003,6 +3003,7 @@ namespace dxvk {
     }
 
     UpdateActiveHazards();
+    UpdateManagedTextureUploadsAll();
 
     return D3D_OK;
   }
@@ -3516,7 +3517,7 @@ namespace dxvk {
 
     // We only care about PS samplers
     if (likely(StateSampler <= caps::MaxSamplers))
-      UpdateActiveRTTextures(StateSampler);
+      UpdateActiveTextures(StateSampler);
 
     return D3D_OK;
   }
@@ -3862,14 +3863,17 @@ namespace dxvk {
       // calling app promises not to overwrite data that is in use
       // or is reading. Remember! This will only trigger for MANAGED resources
       // that cannot get affected by GPU, therefore readonly is A-OK for NOT waiting.
+      const bool uploading = pResource->GetUploading(Subresource);
       const bool readOnly = Flags & D3DLOCK_READONLY;
-      const bool skipWait = (readOnly && managed) || scratch || (readOnly && systemmem);
+      const bool skipWait = (managed && !uploading) || (readOnly && managed) || scratch || (readOnly && systemmem);
 
       if (alloced)
         std::memset(physSlice.mapPtr, 0, physSlice.length);
       else if (!skipWait) {
         if (!WaitForResource(mappedBuffer, Flags))
           return D3DERR_WASSTILLDRAWING;
+
+        pResource->ClearUploading();
       }
     }
     else {
@@ -4003,7 +4007,16 @@ namespace dxvk {
     // Do we have a pending copy?
     if (!pResource->GetReadOnlyLocked(Subresource)) {
       // Only flush buffer -> image if we actually have an image
-      if (pResource->GetMapMode() == D3D9_COMMON_TEXTURE_MAP_MODE_BACKED)
+      if (pResource->IsManaged()) {
+        pResource->SetNeedsUpload(Subresource, true);
+
+        // TODO(Josh): Remove this for loop
+        for (uint32_t i = 0; i < m_state.textures.size(); i++) {
+          if (GetCommonTexture(m_state.textures[i]) == pResource)
+            UpdateManagedTextureUploadIndex(i);
+        }
+      }
+      else if (pResource->GetMapMode() == D3D9_COMMON_TEXTURE_MAP_MODE_BACKED)
         this->FlushImage(pResource, Subresource);
     }
 
@@ -4041,6 +4054,8 @@ namespace dxvk {
       subresource.arrayLayer, 1 };
 
     auto videoFormat = pResource->GetFormatMapping().VideoFormatInfo;
+
+    pResource->SetUploading(Subresource, true);
 
     if (likely(videoFormat.FormatType == D3D9VideoFormat_None)) {
       EmitCs([
@@ -4647,7 +4662,27 @@ namespace dxvk {
   }
 
 
-  inline void D3D9DeviceEx::UpdateActiveRTTextures(uint32_t index) {
+  inline void D3D9DeviceEx::UpdateManagedTextureUploadIndex(uint32_t index) {
+    const uint32_t bit = 1 << index;
+
+    m_activeTexturesToUpload &= ~bit;
+
+    auto tex = GetCommonTexture(m_state.textures[index]);
+    if (tex != nullptr && tex->NeedsAnyUpload())
+      m_activeTexturesToUpload |= bit;
+
+    UpdateManagedTextureUploadsAll();
+  }
+
+
+  inline void D3D9DeviceEx::UpdateManagedTextureUploadsAll() {
+    auto masks = GetShaderMasks();
+
+    m_activeTexturesToUploadFinal = m_activeTexturesToUpload & masks.samplerMask;
+  }
+
+
+  inline void D3D9DeviceEx::UpdateActiveTextures(uint32_t index) {
     const uint32_t bit = 1 << index;
 
     m_activeRTTextures &= ~bit;
@@ -4656,6 +4691,7 @@ namespace dxvk {
     if (tex != nullptr && tex->IsRenderTarget())
       m_activeRTTextures |= bit;
 
+    UpdateManagedTextureUploadIndex(index);
     UpdateActiveHazards();
   }
 
@@ -4688,6 +4724,24 @@ namespace dxvk {
         TransitionImage(tex, VK_IMAGE_LAYOUT_GENERAL);
         m_flags.set(D3D9DeviceFlag::DirtyFramebuffer);
       }
+    }
+  }
+
+
+  void D3D9DeviceEx::UploadManagedTextures() {
+    for (uint32_t tex = m_activeTexturesToUploadFinal; tex; tex &= tex - 1) {
+      // Guaranteed to not be nullptr...
+      auto texInfo = GetCommonTexture(m_state.textures[bit::tzcnt(tex)]);
+
+      for (uint32_t i = 0; i < texInfo->GetUploadBitmask().dwordCount(); i++) {
+        for (uint32_t subresources = texInfo->GetUploadBitmask().dword(i); subresources; subresources &= subresources - 1) {
+          uint32_t subresource = i * 32 + bit::tzcnt(subresources);
+
+          this->FlushImage(texInfo, subresource);
+        }
+      }
+
+      texInfo->ClearNeedsUpload();
     }
   }
 
@@ -5345,6 +5399,13 @@ namespace dxvk {
       auto* vbo = GetCommonBuffer(m_state.vertexBuffers[i].vertexBuffer);
       if (vbo != nullptr && vbo->NeedsUpload())
         FlushBuffer(vbo);
+    }
+
+    if (unlikely(m_activeTexturesToUploadFinal != 0)) {
+      UploadManagedTextures();
+
+      m_activeTexturesToUpload      = 0;
+      m_activeTexturesToUploadFinal = 0;
     }
 
     auto* ibo = GetCommonBuffer(m_state.indices);
