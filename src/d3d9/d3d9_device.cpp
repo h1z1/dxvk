@@ -3835,7 +3835,7 @@ namespace dxvk {
     if (desc.Usage & D3DUSAGE_WRITEONLY)
       Flags &= ~D3DLOCK_READONLY;
 
-    pResource->SetLockFlags(Subresource, Flags);
+    pResource->SetReadOnlyLocked(Subresource, Flags & D3DLOCK_READONLY);
       
     DxvkBufferSliceHandle physSlice;
       
@@ -4001,7 +4001,7 @@ namespace dxvk {
       return D3DERR_INVALIDCALL;
 
     // Do we have a pending copy?
-    if (!(pResource->GetLockFlags(Subresource) & D3DLOCK_READONLY)) {
+    if (!pResource->GetReadOnlyLocked(Subresource)) {
       // Only flush buffer -> image if we actually have an image
       if (pResource->GetMapMode() == D3D9_COMMON_TEXTURE_MAP_MODE_BACKED)
         this->FlushImage(pResource, Subresource);
